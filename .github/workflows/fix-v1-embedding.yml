@@ -1,0 +1,147 @@
+name: Auto-fix Flutter v1 embedding leftovers
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix_v1_embedding:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show repo root
+        run: ls -la
+
+      - name: Find potential v1 embedding files (diagnose)
+        id: findv1
+        run: |
+          echo "Searching for v1 embedding indicators..."
+          grep -RIn --line-number --exclude-dir=.git --exclude-dir=build "io.flutter.app" || true
+          grep -RIn --line-number --exclude-dir=.git --exclude-dir=build "FlutterApplication" || true
+          grep -RIn --line-number --exclude-dir=.git --exclude-dir=build "registerWith" || true
+          grep -RIn --line-number --exclude-dir=.git --exclude-dir=build "io.flutter.plugin" || true
+          echo "::set-output name=done::true"
+
+      - name: Backup any found suspect files
+        run: |
+          mkdir -p v1_backups
+          # backup manifests and any java/kotlin files referencing v1
+          grep -RIl --exclude-dir=.git --exclude-dir=build "io.flutter.app" || true | xargs -I {} -r cp --parents {} v1_backups/ || true
+          grep -RIl --exclude-dir=.git --exclude-dir=build "FlutterApplication" || true | xargs -I {} -r cp --parents {} v1_backups/ || true
+          grep -RIl --exclude-dir=.git --exclude-dir=build "registerWith" || true | xargs -I {} -r cp --parents {} v1_backups/ || true
+          echo "Backups stored under v1_backups/"
+
+      - name: Remove android:name="io.flutter.app.FlutterApplication" from manifests
+        run: |
+          # remove attribute android:name="io.flutter.app.FlutterApplication"
+          find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i 's/\\s*android:name="io.flutter.app.FlutterApplication"//g' || true
+          # remove any meta-data lines that reference io.flutter.app or SplashScreenUntilFirstFrame
+          find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i '/io.flutter.app/d' || true
+          find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i '/SplashScreenUntilFirstFrame/d' || true
+
+      - name: Remove registerWith(...) lines and GeneratedPluginRegistrant.registerWith
+        run: |
+          # Remove lines invoking registerWith or GeneratedPluginRegistrant.registerWith
+          grep -RIl --exclude-dir=.git --exclude-dir=build "registerWith" || true | xargs -I {} -r sed -i '/registerWith/d' {} || true
+          grep -RIl --exclude-dir=.git --exclude-dir=build "GeneratedPluginRegistrant" || true | xargs -I {} -r sed -i '/GeneratedPluginRegistrant/d' {} || true
+
+      - name: Neutralize files that extend FlutterApplication (rename them)
+        run: |
+          # Find java/kotlin files that extend FlutterApplication and move them to backups (so they won't be compiled)
+          grep -RIl --exclude-dir=.git --exclude-dir=build "extends FlutterApplication\\|: FlutterApplication" android || true | while read -r file; do
+            if [ -f "$file" ]; then
+              echo "Moving $file to $file.v1bak"
+              git mv "$file" "$file.v1bak" || mv "$file" "$file.v1bak"
+            fi
+          done || true
+
+      - name: Replace MainActivity with v2 embedding if it still contains v1 code
+        run: |
+          # locate MainActivity files and inspect for registerWith or io.flutter.app usage; replace if found
+          for f in $(grep -RIl --exclude-dir=.git --exclude-dir=build "class MainActivity" android || true); do
+            echo "Inspecting $f"
+            if grep -qE "registerWith|io.flutter.app|FlutterApplication" "$f"; then
+              echo "Replacing $f with v2-compatible MainActivity"
+              cat > "$f" <<'KOTLIN'
+package com.example.status_downloader
+
+import android.app.Activity
+import android.content.ContentValues
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import androidx.annotation.NonNull
+import androidx.documentfile.provider.DocumentFile
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
+
+class MainActivity: FlutterActivity() {
+    private val CHANNEL = "com.statusdownloader/saf"
+    private val OPEN_TREE_REQUEST_CODE = 1001
+    private var pendingResult: MethodChannel.Result? = null
+
+    override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+            // Keep minimal handlers — complex methods may be restored manually if needed
+            when (call.method) {
+                "openDocumentTree" -> {
+                    pendingResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                    startActivityForResult(intent, OPEN_TREE_REQUEST_CODE)
+                }
+                "listFilesInTree" -> {
+                    val uriStr = call.argument<String>("uri")
+                    if (uriStr == null) result.error("ARG_ERROR", "uri is required", null)
+                    else {
+                        val pickedDir = DocumentFile.fromTreeUri(this, Uri.parse(uriStr))
+                        val results = mutableListOf<Map<String, Any?>>()
+                        if (pickedDir != null && pickedDir.exists()) {
+                            for (f in pickedDir.listFiles()) {
+                                val map = mutableMapOf<String, Any?>()
+                                map["name"] = f.name
+                                map["uri"] = f.uri.toString()
+                                map["isDirectory"] = f.isDirectory
+                                map["mime"] = f.type
+                                map["lastModified"] = f.lastModified()
+                                map["size"] = f.length()
+                                results.add(map)
+                            }
+                        }
+                        result.success(results)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+}
+KOTLIN
+            fi
+          done || true
+
+      - name: Show git status / diff preview
+        run: |
+          git status --porcelain
+          git --no-pager diff --staged || git --no-pager diff || true
+
+      - name: Commit fixes to branch and create PR
+        env:
+          BRANCH: fix/v1-embedding
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b $BRANCH || git switch -c $BRANCH
+          git add -A
+          git commit -m "chore: auto-fix Flutter v1 embedding leftovers (manifest & MainActivity adjustments)" || echo "No changes to commit"
+          git push --set-upstream origin $BRANCH || echo "Push failed"
+          # Create a PR via GitHub CLI if available - otherwise output branch name
+          echo "A branch with fixes was pushed: $BRANCH. Please open a PR to review changes."
