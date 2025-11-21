@@ -1,0 +1,23 @@
+name: status_downloader
+description: WhatsApp Status Downloader - Flutter + Android SAF
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=2.18.0 <3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.2
+  file_picker: ^5.2.2
+  path_provider: ^2.0.15
+  flutter_cache_manager: ^3.3.1
+  video_player: ^2.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
