@@ -31,7 +31,6 @@ jobs:
       - name: Backup any found suspect files
         run: |
           mkdir -p v1_backups
-          # backup manifests and any java/kotlin files referencing v1
           grep -RIl --exclude-dir=.git --exclude-dir=build "io.flutter.app" || true | xargs -I {} -r cp --parents {} v1_backups/ || true
           grep -RIl --exclude-dir=.git --exclude-dir=build "FlutterApplication" || true | xargs -I {} -r cp --parents {} v1_backups/ || true
           grep -RIl --exclude-dir=.git --exclude-dir=build "registerWith" || true | xargs -I {} -r cp --parents {} v1_backups/ || true
@@ -39,21 +38,17 @@ jobs:
 
       - name: Remove android:name="io.flutter.app.FlutterApplication" from manifests
         run: |
-          # remove attribute android:name="io.flutter.app.FlutterApplication"
           find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i 's/\\s*android:name="io.flutter.app.FlutterApplication"//g' || true
-          # remove any meta-data lines that reference io.flutter.app or SplashScreenUntilFirstFrame
           find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i '/io.flutter.app/d' || true
           find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i '/SplashScreenUntilFirstFrame/d' || true
 
       - name: Remove registerWith(...) lines and GeneratedPluginRegistrant.registerWith
         run: |
-          # Remove lines invoking registerWith or GeneratedPluginRegistrant.registerWith
           grep -RIl --exclude-dir=.git --exclude-dir=build "registerWith" || true | xargs -I {} -r sed -i '/registerWith/d' {} || true
           grep -RIl --exclude-dir=.git --exclude-dir=build "GeneratedPluginRegistrant" || true | xargs -I {} -r sed -i '/GeneratedPluginRegistrant/d' {} || true
 
       - name: Neutralize files that extend FlutterApplication (rename them)
         run: |
-          # Find java/kotlin files that extend FlutterApplication and move them to backups (so they won't be compiled)
           grep -RIl --exclude-dir=.git --exclude-dir=build "extends FlutterApplication\\|: FlutterApplication" android || true | while read -r file; do
             if [ -f "$file" ]; then
               echo "Moving $file to $file.v1bak"
@@ -63,7 +58,6 @@ jobs:
 
       - name: Replace MainActivity with v2 embedding if it still contains v1 code
         run: |
-          # locate MainActivity files and inspect for registerWith or io.flutter.app usage; replace if found
           for f in $(grep -RIl --exclude-dir=.git --exclude-dir=build "class MainActivity" android || true); do
             echo "Inspecting $f"
             if grep -qE "registerWith|io.flutter.app|FlutterApplication" "$f"; then
@@ -91,7 +85,6 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            // Keep minimal handlers — complex methods may be restored manually if needed
             when (call.method) {
                 "openDocumentTree" -> {
                     pendingResult = result
@@ -143,5 +136,4 @@ KOTLIN
           git add -A
           git commit -m "chore: auto-fix Flutter v1 embedding leftovers (manifest & MainActivity adjustments)" || echo "No changes to commit"
           git push --set-upstream origin $BRANCH || echo "Push failed"
-          # Create a PR via GitHub CLI if available - otherwise output branch name
           echo "A branch with fixes was pushed: $BRANCH. Please open a PR to review changes."
