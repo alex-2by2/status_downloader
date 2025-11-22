@@ -26,7 +26,7 @@ jobs:
           grep -RIn --line-number --exclude-dir=.git --exclude-dir=build "FlutterApplication" || true
           grep -RIn --line-number --exclude-dir=.git --exclude-dir=build "registerWith" || true
           grep -RIn --line-number --exclude-dir=.git --exclude-dir=build "io.flutter.plugin" || true
-          echo "::set-output name=done::true"
+          echo "diagnose_done=true"
 
       - name: Backup any found suspect files
         run: |
@@ -38,7 +38,7 @@ jobs:
 
       - name: Remove android:name="io.flutter.app.FlutterApplication" from manifests
         run: |
-          find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i 's/\\s*android:name="io.flutter.app.FlutterApplication"//g' || true
+          find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i 's/\s*android:name="io.flutter.app.FlutterApplication"//g' || true
           find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i '/io.flutter.app/d' || true
           find android -name "AndroidManifest.xml" -print0 | xargs -0 -n1 sed -i '/SplashScreenUntilFirstFrame/d' || true
 
@@ -49,7 +49,7 @@ jobs:
 
       - name: Neutralize files that extend FlutterApplication (rename them)
         run: |
-          grep -RIl --exclude-dir=.git --exclude-dir=build "extends FlutterApplication\\|: FlutterApplication" android || true | while read -r file; do
+          grep -RIl --exclude-dir=.git --exclude-dir=build "extends FlutterApplication\|: FlutterApplication" android || true | while read -r file; do
             if [ -f "$file" ]; then
               echo "Moving $file to $file.v1bak"
               git mv "$file" "$file.v1bak" || mv "$file" "$file.v1bak"
